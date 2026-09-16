@@ -7,6 +7,7 @@ import os
 import json
 import hashlib
 import ipaddress
+import gc
 from datetime import datetime
 
 import numpy as np
@@ -204,6 +205,11 @@ if "location_cache" not in st.session_state:
 if "manual_result" not in st.session_state:
 
     st.session_state.manual_result = None
+
+
+if "event_times" not in st.session_state:
+
+    st.session_state.event_times = []
 
 
 # ============================================================
@@ -488,17 +494,63 @@ data = load_data()
 
 
 # ============================================================
-# MODEL COMPATIBILITY SHIM
+# REAL ML MODEL LOADING
 # ============================================================
-# Full model files are not loaded on Community Cloud. The live
-# dashboard uses the lightweight scoring functions above.
+# Models are loaded on demand so the login/dashboard can start
+# without loading the large Random Forest. The Random Forest is
+# cached after first use. The Neural Network and LSTM are loaded
+# one at a time during a live event and released afterwards to keep
+# memory usage within Streamlit Community Cloud limits.
 
-models = {}
+models = {
+    "rf": None
+}
 
 
-def get_models():
-    return models
+@st.cache_resource(show_spinner=False)
+def load_rf_model():
 
+    return joblib.load(
+        "random_forest.pkl"
+    )
+
+
+def load_nn_bundle():
+
+    nn = joblib.load(
+        "neural_network.pkl"
+    )
+
+    scaler = joblib.load(
+        "neural_network_scaler.pkl"
+    )
+
+    return nn, scaler
+
+
+def load_lstm_bundle():
+
+    from tensorflow.keras.models import load_model
+
+    lstm = load_model(
+        "lstm_model.keras",
+        compile=False
+    )
+
+    encoder = joblib.load(
+        "lstm_label_encoder.pkl"
+    )
+
+    scaler = joblib.load(
+        "lstm_scaler.pkl"
+    )
+
+    return lstm, encoder, scaler
+
+
+# ============================================================
+# FEATURE ENGINEERING
+# ============================================================
 
 # ============================================================
 # FEATURE ENGINEERING
@@ -668,104 +720,161 @@ def make_features(
     )
 
 
+
 # ============================================================
-# LIGHTWEIGHT LIVE SCORING ENGINE
+# REAL MODEL SCORING
 # ============================================================
-# The full RF/NN/LSTM files are intentionally not loaded by the
-# live dashboard because Streamlit Community Cloud has a limited
-# memory budget. Live alerts use deterministic, explainable scores
-# calculated from the event itself and recent event history.
 
+def predict_with_rf(X, threat):
 
-def calculate_rf(X, threat):
+    if models["rf"] is None:
+        models["rf"] = load_rf_model()
 
-    values = np.asarray(X, dtype=float).reshape(-1)
+    model = models["rf"]
 
-    payload_score = float(np.sum(values[4:13])) / 9.0
-    network_score = float(np.mean(values[:4])) / 255.0
+    probabilities = model.predict_proba(X)[0]
+    classes = model.classes_
 
-    score = (
-        payload_score * 0.75
-        + network_score * 0.10
-        + (0.15 if str(threat).strip() else 0.0)
+    match = np.where(
+        classes == threat
+    )[0]
+
+    if len(match) == 0:
+        return 0.0
+
+    return float(
+        probabilities[match[0]]
     )
 
-    return float(max(0.0, min(1.0, score)))
+
+def predict_with_nn(X, threat):
+
+    nn = None
+    scaler = None
+
+    try:
+        nn, scaler = load_nn_bundle()
+
+        scaled = scaler.transform(X)
+        probabilities = nn.predict_proba(scaled)[0]
+        classes = nn.classes_
+
+        match = np.where(
+            classes == threat
+        )[0]
+
+        if len(match) == 0:
+            return 0.0
+
+        return float(
+            probabilities[match[0]]
+        )
+
+    finally:
+        del nn
+        del scaler
+        gc.collect()
 
 
-def calculate_nn(X, threat):
+def make_lstm_row(threat, severity, cloud, encoder):
 
-    severity = str(threat).strip().lower()
-
-    severity_bonus = {
-        "critical": 1.00,
-        "high": 0.80,
-        "medium": 0.55,
-        "low": 0.30
-    }.get(severity, 0.45)
-
-    values = np.asarray(X, dtype=float).reshape(-1)
-    indicator_score = float(np.sum(values[4:13])) / 9.0
-
-    score = severity_bonus * 0.65 + indicator_score * 0.35
-
-    return float(max(0.0, min(1.0, score)))
-
-
-def make_lstm_row(threat, severity, cloud):
-
-    threat_seed = sum(
-        ord(char)
-        for char in str(threat)
-    ) % 100
+    if threat in encoder.classes_:
+        threat_value = int(
+            encoder.transform([threat])[0]
+        )
+    else:
+        threat_value = 0
 
     cloud_value = {
         "AWS": 0,
         "Azure": 1,
         "GCP": 2
-    }.get(str(cloud), 0)
+    }.get(
+        cloud,
+        0
+    )
 
     severity_value = SEVERITY_VALUE.get(
-        str(severity),
+        severity,
         0.5
     )
 
     return [
-        threat_seed / 100.0,
+        threat_value,
         severity_value,
-        cloud_value / 2.0
+        cloud_value
     ]
 
 
-def calculate_lstm(threat, severity, cloud):
+def predict_with_lstm(threat, severity, cloud):
 
-    current = make_lstm_row(
-        threat,
-        severity,
-        cloud
-    )
+    lstm = None
+    encoder = None
+    scaler = None
+    tf = None
 
-    history = (
-        st.session_state.sequence
-        + [current]
-    )[-TIMESTEPS:]
+    try:
+        lstm, encoder, scaler = load_lstm_bundle()
 
-    if not history:
-        return 0.0
+        current = make_lstm_row(
+            threat,
+            severity,
+            cloud,
+            encoder
+        )
 
-    array = np.asarray(
-        history,
-        dtype=np.float32
-    )
+        history = (
+            st.session_state.sequence
+            + [current]
+        )[-TIMESTEPS:]
 
-    sequence_score = float(
-        np.mean(array[:, 1]) * 0.55
-        + np.mean(array[:, 0]) * 0.25
-        + np.mean(array[:, 2]) * 0.20
-    )
+        while len(history) < TIMESTEPS:
+            history.insert(
+                0,
+                current
+            )
 
-    return float(max(0.0, min(1.0, sequence_score)))
+        array = np.asarray(
+            history,
+            dtype=np.float32
+        )
 
+        scaled = scaler.transform(array)
+
+        X = scaled.reshape(
+            1,
+            TIMESTEPS,
+            3
+        )
+
+        probabilities = lstm.predict(
+            X,
+            verbose=0
+        )[0]
+
+        if threat not in encoder.classes_:
+            return 0.0
+
+        index = int(
+            encoder.transform([threat])[0]
+        )
+
+        return float(
+            probabilities[index]
+        )
+
+    finally:
+        del lstm
+        del encoder
+        del scaler
+
+        try:
+            import tensorflow as tf
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
+
+        gc.collect()
 
 # ============================================================
 # LOCATION LOOKUP
@@ -1097,37 +1206,23 @@ def process_live_event(
 
 
     # --------------------------------------------------------
-    # DEPLOYMENT-SAFE AI SCORING
+    # REAL ML MODEL SCORING
     # --------------------------------------------------------
-    # The full Random Forest/TensorFlow models are intentionally not
-    # loaded by the live feed because the Streamlit Community Cloud
-    # resource limit can terminate the process while loading them.
-    # These three scores use the same engineered threat features and
-    # severity information to keep the live dashboard responsive.
 
-    feature_score = min(
-        sum(X[0][4:13]) / 9.0,
-        1.0
+    rf = predict_with_rf(
+        X,
+        threat
     )
 
-    severity_score_base = SEVERITY_VALUE.get(
+    nn = predict_with_nn(
+        X,
+        threat
+    )
+
+    lstm = predict_with_lstm(
+        threat,
         severity,
-        0.5
-    )
-
-    rf = min(
-        0.70 * severity_score_base + 0.30 * feature_score,
-        1.0
-    )
-
-    nn = min(
-        0.80 * severity_score_base + 0.20 * feature_score,
-        1.0
-    )
-
-    lstm = min(
-        0.60 * severity_score_base + 0.40 * feature_score,
-        1.0
+        cloud
     )
 
 
@@ -1327,18 +1422,13 @@ def process_live_event(
     # LSTM HISTORY
     # --------------------------------------------------------
 
+    # Keep a lightweight history for the LSTM sequence between alerts.
     st.session_state.sequence.append(
-
-        make_lstm_row(
-
-            threat,
-
-            severity,
-
-            cloud
-
-        )
-
+        [
+            0,
+            SEVERITY_VALUE.get(severity, 0.5),
+            {"AWS": 0, "Azure": 1, "GCP": 2}.get(cloud, 0)
+        ]
     )
 
 
@@ -1446,7 +1536,7 @@ st.markdown(
     'AI-Powered Multi-Cloud Cybersecurity Dashboard'
     '</div>',
 
-    unsafe_allow_html=False
+    unsafe_allow_html=True
 
 )
 
@@ -1476,6 +1566,10 @@ with st.sidebar:
 
     )
 
+
+    st.caption(
+        "Live engine limit: up to 100 attacks per hour (one every 36 seconds)."
+    )
 
     st.divider()
 
@@ -1530,6 +1624,7 @@ with st.sidebar:
         st.session_state.sequence = []
 
         st.session_state.cloud_index = 0
+        st.session_state.event_times = []
 
         st.rerun()
 
@@ -1549,6 +1644,7 @@ with st.sidebar:
         st.session_state.events = []
 
         st.session_state.sequence = []
+        st.session_state.event_times = []
 
         st.rerun()
 
@@ -1561,7 +1657,7 @@ with st.sidebar:
 # ============================================================
 
 @st.fragment(
-    run_every="1s"
+    run_every="36s"
 )
 def live_engine():
 
@@ -1594,7 +1690,21 @@ def live_engine():
 
     # --------------------------------------------------------
     # Generate event
+    # Maximum 100 live attacks per rolling hour.
+    # One scheduled event every 36 seconds = max 100/hour.
     # --------------------------------------------------------
+
+    now_ts = datetime.now().timestamp()
+
+    st.session_state.event_times = [
+        ts
+        for ts in st.session_state.event_times
+        if now_ts - ts < 3600
+    ]
+
+    can_generate = (
+        len(st.session_state.event_times) < 100
+    )
 
     if (
 
@@ -1603,6 +1713,10 @@ def live_engine():
         and
 
         available_clouds
+
+        and
+
+        can_generate
 
     ):
 
@@ -1654,6 +1768,9 @@ def live_engine():
             row
         )
 
+        st.session_state.event_times.append(
+            now_ts
+        )
 
         st.session_state.events.insert(
 
