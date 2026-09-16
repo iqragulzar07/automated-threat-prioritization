@@ -1692,7 +1692,7 @@ st.markdown(
     'AI-Powered Multi-Cloud Cybersecurity Dashboard'
     '</div>',
 
-    unsafe_allow_html=True
+    unsafe_allow_html=False
 
 )
 
