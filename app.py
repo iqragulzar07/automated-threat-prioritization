@@ -494,42 +494,34 @@ data = load_data()
 @st.cache_resource
 def load_models():
 
+    models = {}
+
+    models["rf"] = joblib.load(
+        "random_forest.pkl"
+    )
+
+    models["nn"] = joblib.load(
+        "neural_network.pkl"
+    )
+
+    models["nn_scaler"] = joblib.load(
+        "neural_network_scaler.pkl"
+    )
+
+    models["lstm_encoder"] = joblib.load(
+        "lstm_label_encoder.pkl"
+    )
+
+    models["lstm_scaler"] = joblib.load(
+        "lstm_scaler.pkl"
+    )
+
     from tensorflow.keras.models import load_model
 
-    models = {
-
-        "rf":
-            joblib.load(
-                "random_forest.pkl"
-            ),
-
-        "nn":
-            joblib.load(
-                "neural_network.pkl"
-            ),
-
-        "nn_scaler":
-            joblib.load(
-                "neural_network_scaler.pkl"
-            ),
-
-        "lstm":
-            load_model(
-                "lstm_model.keras"
-            ),
-
-        "lstm_encoder":
-            joblib.load(
-                "lstm_label_encoder.pkl"
-            ),
-
-        "lstm_scaler":
-            joblib.load(
-                "lstm_scaler.pkl"
-            )
-
-    }
-
+    models["lstm"] = load_model(
+        "lstm_model.keras",
+        compile=False
+    )
 
     return models
 
