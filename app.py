@@ -392,7 +392,6 @@ if not st.session_state.authenticated:
 # LOAD CACHED LOGS
 # ============================================================
 
-@st.cache_data(show_spinner="Loading security logs...")
 def load_data():
 
     zip_filename = "combined_threats.zip"
@@ -434,7 +433,7 @@ def load_data():
                     "city",
                     "country_code"
                 ],
-                nrows=100000
+                nrows=10000
             )
 
     required = [
