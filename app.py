@@ -487,55 +487,16 @@ def load_data():
 data = load_data()
 
 
-# ===========================================================
-# LOAD MODELS
 # ============================================================
+# MODEL COMPATIBILITY SHIM
+# ============================================================
+# Full model files are not loaded on Community Cloud. The live
+# dashboard uses the lightweight scoring functions above.
 
-@st.cache_resource
-def load_models():
-
-    models = {}
-
-    models["rf"] = joblib.load(
-        "random_forest.pkl"
-    )
-
-    models["nn"] = joblib.load(
-        "neural_network.pkl"
-    )
-
-    models["nn_scaler"] = joblib.load(
-        "neural_network_scaler.pkl"
-    )
-
-    models["lstm_encoder"] = joblib.load(
-        "lstm_label_encoder.pkl"
-    )
-
-    models["lstm_scaler"] = joblib.load(
-        "lstm_scaler.pkl"
-    )
-
-    from tensorflow.keras.models import load_model
-
-    models["lstm"] = load_model(
-        "lstm_model.keras",
-        compile=False
-    )
-
-    return models
-
-
-models = None
+models = {}
 
 
 def get_models():
-
-    global models
-
-    if models is None:
-        models = load_models()
-
     return models
 
 
@@ -708,295 +669,102 @@ def make_features(
 
 
 # ============================================================
-# RANDOM FOREST
+# LIGHTWEIGHT LIVE SCORING ENGINE
 # ============================================================
+# The full RF/NN/LSTM files are intentionally not loaded by the
+# live dashboard because Streamlit Community Cloud has a limited
+# memory budget. Live alerts use deterministic, explainable scores
+# calculated from the event itself and recent event history.
 
-def calculate_rf(
 
-    X,
+def calculate_rf(X, threat):
 
-    threat
+    values = np.asarray(X, dtype=float).reshape(-1)
 
-):
-    models = get_models()
+    payload_score = float(np.sum(values[4:13])) / 9.0
+    network_score = float(np.mean(values[:4])) / 255.0
 
-    probabilities = (
-
-        models["rf"]
-        .predict_proba(
-            X
-        )[0]
-
+    score = (
+        payload_score * 0.75
+        + network_score * 0.10
+        + (0.15 if str(threat).strip() else 0.0)
     )
 
-
-    classes = models["rf"].classes_
-
-
-    match = np.where(
-        classes == threat
-    )[0]
+    return float(max(0.0, min(1.0, score)))
 
 
-    if len(match) == 0:
+def calculate_nn(X, threat):
 
-        return 0.0
+    severity = str(threat).strip().lower()
 
+    severity_bonus = {
+        "critical": 1.00,
+        "high": 0.80,
+        "medium": 0.55,
+        "low": 0.30
+    }.get(severity, 0.45)
 
-    return float(
+    values = np.asarray(X, dtype=float).reshape(-1)
+    indicator_score = float(np.sum(values[4:13])) / 9.0
 
-        probabilities[
-            match[0]
-        ]
+    score = severity_bonus * 0.65 + indicator_score * 0.35
 
-    )
-
-
-# ============================================================
-# NEURAL NETWORK
-# ============================================================
-
-def calculate_nn(
-
-    X,
-
-    threat
-
-):
-    models = get_models()
-
-    scaled = (
-
-        models["nn_scaler"]
-        .transform(X)
-
-    )
+    return float(max(0.0, min(1.0, score)))
 
 
-    probabilities = (
+def make_lstm_row(threat, severity, cloud):
 
-        models["nn"]
-        .predict_proba(
-            scaled
-        )[0]
-
-    )
-
-
-    classes = models["nn"].classes_
-
-
-    match = np.where(
-        classes == threat
-    )[0]
-
-
-    if len(match) == 0:
-
-        return 0.0
-
-
-    return float(
-
-        probabilities[
-            match[0]
-        ]
-
-    )
-
-
-# ============================================================
-# LSTM
-# ============================================================
-
-def make_lstm_row(
-
-    threat,
-
-    severity,
-
-    cloud
-
-):
-    models = get_models()
-
-    encoder = models[
-        "lstm_encoder"
-    ]
-
-
-    if threat in encoder.classes_:
-
-        threat_value = int(
-
-            encoder.transform(
-                [threat]
-            )[0]
-
-        )
-
-    else:
-
-        threat_value = 0
-
+    threat_seed = sum(
+        ord(char)
+        for char in str(threat)
+    ) % 100
 
     cloud_value = {
-
         "AWS": 0,
-
         "Azure": 1,
-
         "GCP": 2
+    }.get(str(cloud), 0)
 
-    }.get(
-
-        cloud,
-
-        0
-
+    severity_value = SEVERITY_VALUE.get(
+        str(severity),
+        0.5
     )
-
-
-    severity_value = (
-
-        SEVERITY_VALUE.get(
-
-            severity,
-
-            0.5
-
-        )
-
-    )
-
 
     return [
-
-        threat_value,
-
+        threat_seed / 100.0,
         severity_value,
-
-        cloud_value
-
+        cloud_value / 2.0
     ]
 
 
-def calculate_lstm(
-
-    threat,
-
-    severity,
-
-    cloud
-
-):
-    models = get_models()
+def calculate_lstm(threat, severity, cloud):
 
     current = make_lstm_row(
-
         threat,
-
         severity,
-
         cloud
-
     )
-
 
     history = (
-
         st.session_state.sequence
+        + [current]
+    )[-TIMESTEPS:]
 
-        +
-
-        [current]
-
-    )
-
-
-    history = history[
-        -TIMESTEPS:
-    ]
-
-
-    while len(history) < TIMESTEPS:
-
-        history.insert(
-            0,
-            current
-        )
-
-
-    array = np.asarray(
-
-        history,
-
-        dtype=np.float32
-
-    )
-
-
-    scaled = (
-
-        models[
-            "lstm_scaler"
-        ]
-
-        .transform(
-            array
-        )
-
-    )
-
-
-    X = scaled.reshape(
-
-        1,
-
-        TIMESTEPS,
-
-        3
-
-    )
-
-
-    probabilities = (
-
-        models["lstm"]
-        .predict(
-            X,
-            verbose=0
-        )[0]
-
-    )
-
-
-    encoder = models[
-        "lstm_encoder"
-    ]
-
-
-    if threat not in encoder.classes_:
-
+    if not history:
         return 0.0
 
-
-    index = int(
-
-        encoder.transform(
-            [threat]
-        )[0]
-
+    array = np.asarray(
+        history,
+        dtype=np.float32
     )
 
-
-    return float(
-
-        probabilities[
-            index
-        ]
-
+    sequence_score = float(
+        np.mean(array[:, 1]) * 0.55
+        + np.mean(array[:, 0]) * 0.25
+        + np.mean(array[:, 2]) * 0.20
     )
+
+    return float(max(0.0, min(1.0, sequence_score)))
 
 
 # ============================================================
@@ -2198,7 +1966,7 @@ def live_engine():
 
 
     st.subheader(
-        "🤖 AI Threat Assessment"
+        "🤖 AI Threat Assessment (Lightweight Live Engine)"
     )
 
 
@@ -2216,7 +1984,7 @@ def live_engine():
 
     b.metric(
 
-        "Random Forest",
+        "Pattern Score",
 
         f'{latest["rf"]}%'
 
@@ -2225,7 +1993,7 @@ def live_engine():
 
     c.metric(
 
-        "Neural Network",
+        "Context Score",
 
         f'{latest["nn"]}%'
 
@@ -2234,7 +2002,7 @@ def live_engine():
 
     d.metric(
 
-        "LSTM",
+        "Sequence Score",
 
         f'{latest["lstm"]}%'
 
