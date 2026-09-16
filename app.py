@@ -491,7 +491,7 @@ data = load_data()
 # LOAD MODELS
 # ============================================================
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading AI models...")
 def load_models():
 
     models = {}
@@ -1710,7 +1710,7 @@ with st.sidebar:
 
         "LIVE THREAT FEED",
 
-        value=True
+        value=False
 
     )
 
