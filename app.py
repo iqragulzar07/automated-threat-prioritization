@@ -384,10 +384,11 @@ if not st.session_state.authenticated:
     st.stop()
 
 
+
+
 # ============================================================
 # LOAD CACHED LOGS
 # ============================================================
-
 # ============================================================
 # LOAD CACHED LOGS
 # ============================================================
@@ -420,7 +421,22 @@ def load_data():
         csv_name = csv_files[0]
 
         with z.open(csv_name) as f:
-            df = pd.read_csv(f)
+
+            df = pd.read_csv(
+                f,
+                usecols=[
+                    "src",
+                    "payload_text",
+                    "type",
+                    "severity",
+                    "target",
+                    "latitude",
+                    "longitude",
+                    "city",
+                    "country_code"
+                ],
+                nrows=100000
+            )
 
     required = [
         "src",
@@ -468,6 +484,7 @@ def load_data():
             df[column] = df[column].astype("float32")
 
     return df
+
 
 data = load_data()
 
