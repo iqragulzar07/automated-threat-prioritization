@@ -491,7 +491,7 @@ data = load_data()
 # LOAD MODELS
 # ============================================================
 
-@st.cache_resource(show_spinner="Loading AI models...")
+@st.cache_resource
 def load_models():
 
     models = {}
@@ -1329,43 +1329,37 @@ def process_live_event(
 
 
     # --------------------------------------------------------
-    # RF
+    # DEPLOYMENT-SAFE AI SCORING
     # --------------------------------------------------------
+    # The full Random Forest/TensorFlow models are intentionally not
+    # loaded by the live feed because the Streamlit Community Cloud
+    # resource limit can terminate the process while loading them.
+    # These three scores use the same engineered threat features and
+    # severity information to keep the live dashboard responsive.
 
-    rf = calculate_rf(
-
-        X,
-
-        threat
-
+    feature_score = min(
+        sum(X[0][4:13]) / 9.0,
+        1.0
     )
 
-
-    # --------------------------------------------------------
-    # NN
-    # --------------------------------------------------------
-
-    nn = calculate_nn(
-
-        X,
-
-        threat
-
-    )
-
-
-    # --------------------------------------------------------
-    # LSTM
-    # --------------------------------------------------------
-
-    lstm = calculate_lstm(
-
-        threat,
-
+    severity_score_base = SEVERITY_VALUE.get(
         severity,
+        0.5
+    )
 
-        cloud
+    rf = min(
+        0.70 * severity_score_base + 0.30 * feature_score,
+        1.0
+    )
 
+    nn = min(
+        0.80 * severity_score_base + 0.20 * feature_score,
+        1.0
+    )
+
+    lstm = min(
+        0.60 * severity_score_base + 0.40 * feature_score,
+        1.0
     )
 
 
