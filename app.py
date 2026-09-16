@@ -17,7 +17,6 @@ import joblib
 import streamlit as st
 import pydeck as pdk
 
-from tensorflow.keras.models import load_model
 
 
 # ============================================================
@@ -489,12 +488,14 @@ def load_data():
 data = load_data()
 
 
-# ============================================================
+# ===========================================================
 # LOAD MODELS
 # ============================================================
 
 @st.cache_resource
 def load_models():
+
+    from tensorflow.keras.models import load_model
 
     models = {
 
