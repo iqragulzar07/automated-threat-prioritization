@@ -471,8 +471,6 @@ def load_data():
 
 data = load_data()
 
-data = load_data()
-
 
 # ============================================================
 # LOAD MODELS
@@ -519,7 +517,17 @@ def load_models():
     return models
 
 
-models = load_models()
+models = None
+
+
+def get_models():
+
+    global models
+
+    if models is None:
+        models = load_models()
+
+    return models
 
 
 # ============================================================
@@ -701,6 +709,7 @@ def calculate_rf(
     threat
 
 ):
+     models = get_models()
 
     probabilities = (
 
@@ -745,6 +754,7 @@ def calculate_nn(
     threat
 
 ):
+    models = get_models()
 
     scaled = (
 
@@ -799,6 +809,7 @@ def make_lstm_row(
     cloud
 
 ):
+    models = get_models()
 
     encoder = models[
         "lstm_encoder"
@@ -870,6 +881,7 @@ def calculate_lstm(
     cloud
 
 ):
+    models = get_models()
 
     current = make_lstm_row(
 
