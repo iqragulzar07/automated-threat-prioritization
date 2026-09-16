@@ -388,6 +388,10 @@ if not st.session_state.authenticated:
 # LOAD CACHED LOGS
 # ============================================================
 
+# ============================================================
+# LOAD CACHED LOGS
+# ============================================================
+
 @st.cache_data(show_spinner="Loading security logs...")
 def load_data():
 
@@ -447,8 +451,25 @@ def load_data():
     if "country_code" not in df.columns:
         df["country_code"] = "Unknown"
 
-    return df.copy()
+    # Reduce memory usage
+    for column in [
+        "src",
+        "type",
+        "severity",
+        "target",
+        "city",
+        "country_code"
+    ]:
+        if column in df.columns:
+            df[column] = df[column].astype("category")
 
+    for column in ["latitude", "longitude"]:
+        if column in df.columns:
+            df[column] = df[column].astype("float32")
+
+    return df
+
+data = load_data()
 
 data = load_data()
 
