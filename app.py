@@ -392,26 +392,31 @@ if not st.session_state.authenticated:
 def load_data():
 
     zip_filename = "combined_threats.zip"
-    csv_filename = "combined_threats.csv"
 
-    if not os.path.exists(csv_filename):
-
-        if not os.path.exists(zip_filename):
-            raise FileNotFoundError(
-                "combined_threats.zip was not found."
-            )
-
-        import zipfile
-
-        with zipfile.ZipFile(zip_filename, "r") as z:
-            z.extractall(".")
-
-    if not os.path.exists(csv_filename):
+    if not os.path.exists(zip_filename):
         raise FileNotFoundError(
-            "combined_threats.csv could not be extracted."
+            "combined_threats.zip was not found."
         )
 
-    df = pd.read_csv(csv_filename)
+    import zipfile
+
+    with zipfile.ZipFile(zip_filename, "r") as z:
+
+        csv_files = [
+            name
+            for name in z.namelist()
+            if name.lower().endswith(".csv")
+        ]
+
+        if not csv_files:
+            raise FileNotFoundError(
+                "No CSV file was found inside combined_threats.zip."
+            )
+
+        csv_name = csv_files[0]
+
+        with z.open(csv_name) as f:
+            df = pd.read_csv(f)
 
     required = [
         "src",
