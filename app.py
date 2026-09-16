@@ -388,89 +388,59 @@ if not st.session_state.authenticated:
 # LOAD CACHED LOGS
 # ============================================================
 
-@st.cache_data(
-    show_spinner="Loading security logs..."
-)
+@st.cache_data(show_spinner="Loading security logs...")
 def load_data():
 
-    filename = "combined_threats.csv"
+    zip_filename = "combined_threats.zip"
+    csv_filename = "combined_threats.csv"
 
+    if not os.path.exists(csv_filename):
 
-    if not os.path.exists(filename):
+        if not os.path.exists(zip_filename):
+            raise FileNotFoundError(
+                "combined_threats.zip was not found."
+            )
 
+        import zipfile
+
+        with zipfile.ZipFile(zip_filename, "r") as z:
+            z.extractall(".")
+
+    if not os.path.exists(csv_filename):
         raise FileNotFoundError(
-            "combined_threats.csv was not found."
+            "combined_threats.csv could not be extracted."
         )
 
-
-    df = pd.read_csv(
-        filename
-    )
-
+    df = pd.read_csv(csv_filename)
 
     required = [
-
         "src",
-
         "payload_text",
-
         "type",
-
         "severity",
-
         "target"
-
     ]
-
 
     missing = [
-
         column
-
         for column in required
-
         if column not in df.columns
-
     ]
 
-
     if missing:
-
         raise ValueError(
-
-            "Missing columns: "
-
-            +
-
-            ", ".join(missing)
-
+            "Missing columns: " + ", ".join(missing)
         )
 
-
-    # Ensure location columns exist
-
-    for column in [
-
-        "latitude",
-
-        "longitude"
-
-    ]:
-
+    for column in ["latitude", "longitude"]:
         if column not in df.columns:
-
             df[column] = np.nan
 
-
     if "city" not in df.columns:
-
         df["city"] = "Unknown"
 
-
     if "country_code" not in df.columns:
-
         df["country_code"] = "Unknown"
-
 
     return df.copy()
 
