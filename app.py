@@ -709,7 +709,7 @@ def calculate_rf(
     threat
 
 ):
-     models = get_models()
+    models = get_models()
 
     probabilities = (
 
